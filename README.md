@@ -38,3 +38,13 @@ Der Worker liest `https://raw.githubusercontent.com/googie0815/umap-daten/main/d
 - `.github/workflows/update-roadworks.yml`: Zeitplan und Speicherung erfolgreicher Ergebnisse.
 
 Die Landkreisgrenze, räumliche Schnittprüfung, Gegenrichtungszusammenführung, Detailtexte und Darstellung werden aus dem bereitgestellten Code übernommen. Bei Änderung der Worker-Domain muss `PUBLIC_ORIGIN` im Workflow angepasst und die Aufbereitung erneut ausgeführt werden, da die GeoJSON-Datei absolute Icon-Adressen enthält. Den Cloudflare-Worker zusätzlich mit der Testkarte auf Darstellung und kostenlose CPU-Grenze prüfen.
+
+## Umleitungen BW
+
+Zusätzliche uMap-Ebene: `https://raw.githubusercontent.com/googie0815/umap-daten/main/data/rerouting-datex.geojson` (Format GeoJSON, dynamisch laden). Die direkte URL benötigt keine Änderung am Cloudflare-Worker. Orange gestrichelte Linien werden über `_umap_options` vorgegeben.
+
+Der bestehende Aktualisierungslauf erzeugt auch diese Datei mittels `python3 scripts/generate-rerouting.py` (Python-Standardbibliothek). Datenquelle ist der separate BEMaS-DATEX-Feed `rerouting_management_svzbw.datex2.xml`. Nur `originalRoute=false` wird ausgegeben. Originalstrecken werden ausschließlich zur räumlichen Zuordnung genutzt: Schneidet die Originalstrecke oder die Umleitung den Landkreis, bleibt die vollständige Umleitung einschließlich Abschnitten außerhalb des Landkreises erhalten. Unterschiedliche Routen und Fahrtrichtungen bleiben getrennt.
+
+Abgelaufene und ausgesetzte Meldungen werden ausgelassen; zukünftige Meldungen bleiben als „geplant“ sichtbar. Der angezeigte Gesamtzeitraum ist keine Zusicherung einer durchgehend aktiven Umleitung. Fahrzeugarten und Gewichtungswerte bleiben als unveränderte Quellangaben erhalten; daraus wird keine Lkw- oder GST-Eignung abgeleitet. Eine Verknüpfung zum Baustellen-Popup wird noch nicht hergestellt; `situation_id` und `record_id` ermöglichen die Quellenzuordnung.
+
+Einzelne Quellrouten enthalten nur identische Punkte und keine darstellbare Linie. Diese werden ausgelassen und in `metadata.routes_without_line` gezählt. Bei Abruffehlern, unbekannten Geometrien oder unverstandenem Landesfeed bricht der Lauf ohne Datencommit ab. Die Umleitungsdatei hat einen eigenen Zeitstempel in `metadata.generated`.
