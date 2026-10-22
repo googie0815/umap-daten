@@ -6,6 +6,7 @@ import os
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 SOURCE = 'https://dev-ipl.mobidata-bw.de/datasets/traffic/rerouting_management/rerouting_management_svzbw.datex2.xml'
@@ -22,6 +23,12 @@ def download(url):
 
 def text(element, path):
     return element.findtext(path, default='', namespaces=NS).strip()
+
+
+def display_date(value):
+    if not value:
+        return "nicht angegeben"
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y, %H:%M Uhr")
 
 
 def coordinate(element):
@@ -154,7 +161,7 @@ def convert(xml, boundary, now=None):
                     vehicle_data.append({'vehicle_type': text(item, 'd:validForVehiclesWithCharacteristics/d:vehicleType'), 'weight': text(item, 'd:weight')})
                 record_id = record.get('id', '')
                 state = 'geplant' if start and datetime.fromisoformat(start.replace('Z', '+00:00')) > now else 'im Gültigkeitszeitraum'
-                description = '\n\n'.join([name, f'Gültig ab: {start}', f'Gültig bis: {end}', f'Status: {state}', f'BEMaS-Situation: {situation.get("id", "")}', NOTE])
+                description = '\n\n'.join([f'**Gültig ab:** {display_date(start)}', f'**Gültig bis:** {display_date(end)}', f'**Status:** {state}', f'**Letzte Änderung:** {display_date(text(record, "d:situationRecordVersionTime"))}', f'**Hinweis:** {NOTE}'])
                 features.append({'type': 'Feature', 'id': f'{record_id}:route:{i}', 'geometry': {'type': 'MultiLineString', 'coordinates': lines}, 'properties': {'name': name, 'description': description, 'situation_id': situation.get('id', ''), 'record_id': record_id, 'gueltig_ab': start, 'gueltig_bis': end, 'status': state, 'validity_status': status, 'letzte_aenderung': text(record, 'd:situationRecordVersionTime'), 'fahrzeugangaben_quelle': json.dumps(vehicle_data, ensure_ascii=False), 'hinweis': NOTE, '_umap_options': {'color': '#E88A14', 'weight': 5, 'opacity': 0.85, 'dashArray': '10,6'}}})
     if total == 0:
         raise ValueError('Keine verstandenen Umleitungen im Landesfeed')
