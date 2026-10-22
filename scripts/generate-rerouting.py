@@ -113,7 +113,78 @@ def touches_county(lines, polygons):
     return False
 
 
-def convert(xml, boundary, now=None):
+def roadworks_names(xml):
+    root = ET.fromstring(xml)
+    situations = root.findall('.//d:situation', NS)
+    if not situations:
+        raise ValueError('Baustellenquelle leer oder unverstanden')
+    names = {}
+    for situation in situations:
+        for comment in situation.findall('d:situationExtension//d:overallSituation/d:generalPublicComment', NS):
+            if text(comment, './/d:commentType2') == 'roadworksName':
+                value = text(comment, 'd:comment/d:values/d:value')
+                if value:
+                    names[situation.get('id', '')] = value
+    return names
+
+
+def unique_lines(lines):
+    """Union exact undirected edges; join degree-two vertices into trails."""
+    adjacency, edges = {}, set()
+    for line in lines:
+        for a, b in zip(line, line[1:]):
+            a, b = tuple(a), tuple(b)
+            if a == b:
+                continue
+            edges.add(tuple(sorted((a, b))))
+            adjacency.setdefault(a, set()).add(b)
+            adjacency.setdefault(b, set()).add(a)
+    remaining, result = set(edges), []
+    def walk(a, b):
+        path = [a, b]
+        remaining.remove(tuple(sorted((a, b))))
+        while len(adjacency[b]) == 2:
+            candidates = [c for c in sorted(adjacency[b]) if tuple(sorted((b,c))) in remaining]
+            if not candidates:
+                break
+            c = candidates[0]
+            remaining.remove(tuple(sorted((b,c))))
+            path.append(c)
+            a, b = b, c
+        result.append([list(p) for p in path])
+    for a in sorted(adjacency):
+        if len(adjacency[a]) != 2:
+            for b in sorted(adjacency[a]):
+                if tuple(sorted((a,b))) in remaining:
+                    walk(a,b)
+    while remaining:
+        walk(*min(remaining))
+    return result
+
+
+def combine_routes(features, names):
+    groups = {}
+    for feature in features:
+        groups.setdefault(feature['properties']['record_id'], []).append(feature)
+    result = []
+    for record_id, members in groups.items():
+        sources = json.dumps(members, ensure_ascii=False, separators=(',', ':'))
+        props = dict(members[0]['properties'])
+        labels = list(dict.fromkeys(f['properties']['name'] for f in members))
+        closure = names.get(props['situation_id'], '')
+        props['zugehoerige_sperrung'] = closure
+        props['routen'] = ' / '.join(labels)
+        props['quellrouten'] = sources
+        props['name'] = f'Umleitung – {closure}' if closure else ' / '.join(labels)
+        reference = closure or 'Keine Bezeichnung in der Baustellenquelle verfügbar.'
+        props['description'] = f'**Zugehörige Sperrung / Baumaßnahme:** {reference}\n\n**Routen:** {props["routen"]}\n\n' + props['description']
+        props['fahrzeugangaben_quelle'] = json.dumps([{'route': f['properties']['name'], 'angaben': json.loads(f['properties']['fahrzeugangaben_quelle'])} for f in members], ensure_ascii=False)
+        lines = unique_lines([line for f in members for line in f['geometry']['coordinates']])
+        result.append({'type': 'Feature', 'id': f'{record_id}:combined', 'geometry': {'type': 'MultiLineString', 'coordinates': lines}, 'properties': props})
+    return result
+
+
+def convert(xml, boundary, now=None, names=None):
     root = ET.fromstring(xml)
     records = root.findall('.//d:situationRecord', NS)
     if not records:
@@ -165,17 +236,21 @@ def convert(xml, boundary, now=None):
                 features.append({'type': 'Feature', 'id': f'{record_id}:route:{i}', 'geometry': {'type': 'MultiLineString', 'coordinates': lines}, 'properties': {'name': name, 'description': description, 'situation_id': situation.get('id', ''), 'record_id': record_id, 'gueltig_ab': start, 'gueltig_bis': end, 'status': state, 'validity_status': status, 'letzte_aenderung': text(record, 'd:situationRecordVersionTime'), 'fahrzeugangaben_quelle': json.dumps(vehicle_data, ensure_ascii=False), 'hinweis': NOTE, '_umap_options': {'color': '#E88A14', 'weight': 5, 'opacity': 0.85, 'dashArray': '12,14'}}})
     if total == 0:
         raise ValueError('Keine verstandenen Umleitungen im Landesfeed')
-    return {'type': 'FeatureCollection', 'metadata': {'generated': now.isoformat(), 'source': SOURCE, 'county': 'Landkreis Sigmaringen', 'records': len(records), 'statewide_detours': total, 'expired_detours': expired, 'routes_without_line': missing_geometry, 'features': len(features), 'filter': 'Originalstrecke oder Umleitung schneidet Landkreis; vollständige Umleitung bleibt erhalten', 'note': NOTE}, 'features': features}
+    source_features = len(features)
+    features = combine_routes(features, names or {})
+    return {'type': 'FeatureCollection', 'metadata': {'generated': now.isoformat(), 'source': SOURCE, 'county': 'Landkreis Sigmaringen', 'records': len(records), 'statewide_detours': total, 'expired_detours': expired, 'routes_without_line': missing_geometry, 'features': len(features), 'source_routes': source_features, 'filter': 'Originalstrecke oder Umleitung schneidet Landkreis; vollständige Umleitung bleibt erhalten', 'note': NOTE}, 'features': features}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--xml')
     parser.add_argument('--boundary')
+    parser.add_argument('--roadworks')
     args = parser.parse_args()
     xml = Path(args.xml).read_bytes() if args.xml else download(SOURCE)
     boundary = json.loads(Path(args.boundary).read_text() if args.boundary else download(BOUNDARY))
-    data = convert(xml, boundary)
+    roadworks = Path(args.roadworks).read_bytes() if args.roadworks else download('https://dev-ipl.mobidata-bw.de/datasets/traffic/roadworks/roadworks_svzbw.datex2.xml')
+    data = convert(xml, boundary, names=roadworks_names(roadworks))
     target = Path(__file__).resolve().parent.parent / 'data' / 'rerouting-datex.geojson'
     temporary = target.with_suffix('.tmp')
     temporary.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':')) + '\n')

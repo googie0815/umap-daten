@@ -26,6 +26,17 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(result['features'][0]['properties']['status'],'geplant')
         self.assertEqual(m.convert(xml,county,datetime(2029,1,1,tzinfo=timezone.utc))['features'],[])
 
+    def test_shared_reverse_edges_are_drawn_once_and_branches_survive(self):
+        lines = [[[0,0],[1,0],[2,0]], [[2,0],[1,0],[0,0]], [[1,0],[1,1]]]
+        output = m.unique_lines(lines)
+        edges = [tuple(sorted((tuple(a),tuple(b)))) for line in output for a,b in zip(line,line[1:])]
+        self.assertEqual(len(edges), 3)
+        self.assertEqual(len(set(edges)), 3)
+
+    def test_closure_name_is_joined_by_id(self):
+        xml = f'<d2LogicalModel xmlns="{m.NS["d"]}"><situation id="42"><situationExtension><overallSituation><generalPublicComment><comment><values><value>B311 Test</value></values></comment><commentExtension><commentType2>roadworksName</commentType2></commentExtension></generalPublicComment></overallSituation></situationExtension></situation></d2LogicalModel>'
+        self.assertEqual(m.roadworks_names(xml), {'42': 'B311 Test'})
+
     def test_invalid_feed_does_not_publish_empty_result(self):
         with self.assertRaises(ValueError):
             m.convert('<empty/>', {})
